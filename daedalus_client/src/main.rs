@@ -6,10 +6,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Semaphore;
 
-mod fabric;
-mod legacy_fabric;
 mod babric;
+mod fabric;
 mod forge;
+mod legacy_fabric;
 mod minecraft;
 
 #[derive(thiserror::Error, Debug)]
@@ -74,7 +74,7 @@ async fn main() {
                 &mut uploaded_files,
                 semaphore.clone(),
             )
-                .await
+            .await
             {
                 Ok(..) => {}
                 Err(err) => error!("{:?}", err),
@@ -84,7 +84,7 @@ async fn main() {
                 &mut uploaded_files,
                 semaphore.clone(),
             )
-                .await
+            .await
             {
                 Ok(..) => {}
                 Err(err) => error!("{:?}", err),
@@ -94,7 +94,7 @@ async fn main() {
                 &mut uploaded_files,
                 semaphore.clone(),
             )
-                .await
+            .await
             {
                 Ok(..) => {}
                 Err(err) => error!("{:?}", err),

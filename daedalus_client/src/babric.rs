@@ -1,13 +1,15 @@
-use std::sync::Arc;
-use tokio::sync::Semaphore;
-use daedalus::modded::PartialVersionInfo;
-use crate::fabric::{FabricVersions, fetch_fabric_like_version, fetch_fabric_like_versions};
+use crate::fabric::{
+    fetch_fabric_like_version, fetch_fabric_like_versions, FabricVersions,
+};
 use crate::{download_file, format_url, upload_file_to_bucket, Error};
 use daedalus::minecraft::{Library, VersionManifest};
+use daedalus::modded::PartialVersionInfo;
 use daedalus::modded::{
     LoaderVersion, Manifest, Version, DUMMY_REPLACE_STRING,
 };
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::sync::Semaphore;
 use tokio::sync::{Mutex, RwLock};
 
 const BABRIC_META_URL: &str = "https://meta.babric.glass-launcher.net/v2";
@@ -22,8 +24,8 @@ pub async fn retrieve_data(
         "babric/v{}/manifest.json",
         daedalus::modded::CURRENT_BABRIC_FORMAT_VERSION,
     )))
-        .await
-        .ok();
+    .await
+    .ok();
 
     let mut versions = if let Some(old_manifest) = old_manifest {
         old_manifest.game_versions
@@ -66,7 +68,7 @@ pub async fn retrieve_data(
                     &loader,
                     semaphore.clone(),
                 )
-                    .await?;
+                .await?;
 
                 Ok::<Option<(Box<bool>, String, PartialVersionInfo)>, Error>(
                     Some((stable, loader, version)),
@@ -74,7 +76,7 @@ pub async fn retrieve_data(
             },
         ),
     )
-        .await?;
+    .await?;
 
     let visited_artifacts_mutex = Arc::new(Mutex::new(Vec::new()));
     futures::future::try_join_all(loader_versions.into_iter()
@@ -282,7 +284,7 @@ pub async fn retrieve_data(
         &uploaded_files_mutex,
         semaphore,
     )
-        .await?;
+    .await?;
 
     if let Ok(uploaded_files_mutex) = Arc::try_unwrap(uploaded_files_mutex) {
         uploaded_files.extend(uploaded_files_mutex.into_inner());
@@ -296,7 +298,13 @@ async fn fetch_babric_version(
     loader_version: &str,
     semaphore: Arc<Semaphore>,
 ) -> Result<PartialVersionInfo, Error> {
-    fetch_fabric_like_version(version_number, loader_version, semaphore, BABRIC_META_URL).await
+    fetch_fabric_like_version(
+        version_number,
+        loader_version,
+        semaphore,
+        BABRIC_META_URL,
+    )
+    .await
 }
 
 async fn fetch_babric_versions(

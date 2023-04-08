@@ -303,7 +303,7 @@ pub async fn fetch_fabric_like_version(
             None,
             semaphore,
         )
-            .await?,
+        .await?,
     )?)
 }
 
@@ -312,7 +312,13 @@ async fn fetch_fabric_version(
     loader_version: &str,
     semaphore: Arc<Semaphore>,
 ) -> Result<PartialVersionInfo, Error> {
-    fetch_fabric_like_version(version_number, loader_version, semaphore, FABRIC_META_URL).await
+    fetch_fabric_like_version(
+        version_number,
+        loader_version,
+        semaphore,
+        FABRIC_META_URL,
+    )
+    .await
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
