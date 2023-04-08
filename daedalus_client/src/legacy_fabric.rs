@@ -7,7 +7,6 @@ use daedalus::modded::PartialVersionInfo;
 use daedalus::modded::{
     LoaderVersion, Manifest, Version, DUMMY_REPLACE_STRING,
 };
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::sync::{Mutex, RwLock};
