@@ -288,27 +288,36 @@ pub async fn retrieve_data(
 
 const FABRIC_META_URL: &str = "https://meta.fabricmc.net/v2";
 
-async fn fetch_fabric_version(
+pub async fn fetch_fabric_like_version(
     version_number: &str,
     loader_version: &str,
     semaphore: Arc<Semaphore>,
+    meta_url: &str,
 ) -> Result<PartialVersionInfo, Error> {
     Ok(serde_json::from_slice(
         &download_file(
             &format!(
                 "{}/versions/loader/{}/{}/profile/json",
-                FABRIC_META_URL, version_number, loader_version
+                meta_url, version_number, loader_version
             ),
             None,
             semaphore,
         )
-        .await?,
+            .await?,
     )?)
+}
+
+async fn fetch_fabric_version(
+    version_number: &str,
+    loader_version: &str,
+    semaphore: Arc<Semaphore>,
+) -> Result<PartialVersionInfo, Error> {
+    fetch_fabric_like_version(version_number, loader_version, semaphore, FABRIC_META_URL).await
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 /// Versions of fabric components
-struct FabricVersions {
+pub struct FabricVersions {
     /// Versions of Minecraft that fabric supports
     pub game: Vec<FabricGameVersion>,
     /// Available versions of the fabric loader
@@ -317,7 +326,7 @@ struct FabricVersions {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 /// A version of Minecraft that fabric supports
-struct FabricGameVersion {
+pub struct FabricGameVersion {
     /// The version number of the game
     pub version: String,
     /// Whether the Minecraft version is stable or not
@@ -326,7 +335,7 @@ struct FabricGameVersion {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 /// A version of the fabric loader
-struct FabricLoaderVersion {
+pub struct FabricLoaderVersion {
     /// The separator to get the build number
     pub separator: String,
     /// The build number
@@ -339,16 +348,24 @@ struct FabricLoaderVersion {
     pub stable: bool,
 }
 /// Fetches the list of fabric versions
-async fn fetch_fabric_versions(
+pub async fn fetch_fabric_like_versions(
     url: Option<&str>,
     semaphore: Arc<Semaphore>,
+    meta_url: &str,
 ) -> Result<FabricVersions, Error> {
     Ok(serde_json::from_slice(
         &download_file(
-            url.unwrap_or(&*format!("{}/versions", FABRIC_META_URL)),
+            url.unwrap_or(&*format!("{}/versions", meta_url)),
             None,
             semaphore,
         )
         .await?,
     )?)
+}
+
+async fn fetch_fabric_versions(
+    url: Option<&str>,
+    semaphore: Arc<Semaphore>,
+) -> Result<FabricVersions, Error> {
+    fetch_fabric_like_versions(url, semaphore, FABRIC_META_URL).await
 }
