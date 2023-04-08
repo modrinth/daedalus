@@ -8,6 +8,7 @@ use tokio::sync::Semaphore;
 
 mod fabric;
 mod legacy_fabric;
+mod babric;
 mod forge;
 mod minecraft;
 
@@ -79,6 +80,16 @@ async fn main() {
                 Err(err) => error!("{:?}", err),
             };
             match legacy_fabric::retrieve_data(
+                &manifest,
+                &mut uploaded_files,
+                semaphore.clone(),
+            )
+                .await
+            {
+                Ok(..) => {}
+                Err(err) => error!("{:?}", err),
+            };
+            match babric::retrieve_data(
                 &manifest,
                 &mut uploaded_files,
                 semaphore.clone(),
