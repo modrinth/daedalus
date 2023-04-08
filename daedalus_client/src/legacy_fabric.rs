@@ -112,7 +112,7 @@ pub async fn retrieve_data(
                                     &format!(
                                         "{}{}",
                                         lib_url.unwrap_or_else(|| {
-                                            "https://maven.fabricmc.net/".to_string()
+                                            "https://repo.legacyfabric.net/repository/legacyfabric/".to_string()
                                         }),
                                         artifact_path
                                     ),
@@ -147,7 +147,7 @@ pub async fn retrieve_data(
                         &format!(
                             "{}{}",
                             lib.url.unwrap_or_else(|| {
-                                "https://maven.fabricmc.net/".to_string()
+                                "https://repo.legacyfabric.net/repository/legacyfabric/".to_string()
                             }),
                             artifact_path
                         ),
