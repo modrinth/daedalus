@@ -14,7 +14,7 @@ pub async fn retrieve_data(
     uploaded_files: &mut Vec<String>,
     semaphore: Arc<Semaphore>,
 ) -> Result<VersionManifest, Error> {
-    let old_manifest = daedalus::minecraft::fetch_version_manifest(Some(
+    let mut old_manifest = daedalus::minecraft::fetch_version_manifest(Some(
         &*format_url(&format!(
             "minecraft/v{}/manifest.json",
             daedalus::minecraft::CURRENT_FORMAT_VERSION
@@ -22,6 +22,7 @@ pub async fn retrieve_data(
     ))
     .await
     .ok();
+    old_manifest = None;
 
     let mut manifest =
         daedalus::minecraft::fetch_version_manifest(None).await?;
@@ -77,6 +78,13 @@ pub async fn retrieve_data(
                     if !actual_patches.is_empty()
                     {
                         for patch in actual_patches {
+                            if let Some(override_) = &patch.override_ {
+                                library = merge_partial_library(
+                                    override_.clone(),
+                                    library,
+                                );
+                            }
+
                             if let Some(additional_libraries) =
                                 &patch.additional_libraries
                             {
@@ -88,11 +96,6 @@ pub async fn retrieve_data(
                                         val.push(additional_library.clone());
                                     }
                                 }
-                            } else if let Some(override_) = &patch.override_ {
-                                library = merge_partial_library(
-                                    override_.clone(),
-                                    library,
-                                );
                             }
                         }
 
