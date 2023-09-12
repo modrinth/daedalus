@@ -14,7 +14,7 @@ pub async fn retrieve_data(
     uploaded_files: &mut Vec<String>,
     semaphore: Arc<Semaphore>,
 ) -> Result<VersionManifest, Error> {
-    let mut old_manifest = daedalus::minecraft::fetch_version_manifest(Some(
+    let old_manifest = daedalus::minecraft::fetch_version_manifest(Some(
         &*format_url(&format!(
             "minecraft/v{}/manifest.json",
             daedalus::minecraft::CURRENT_FORMAT_VERSION
