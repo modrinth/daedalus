@@ -14,7 +14,7 @@ pub async fn retrieve_data(
     uploaded_files: &mut Vec<String>,
     semaphore: Arc<Semaphore>,
 ) -> Result<VersionManifest, Error> {
-    let old_manifest = daedalus::minecraft::fetch_version_manifest(Some(
+    let mut old_manifest = daedalus::minecraft::fetch_version_manifest(Some(
         &*format_url(&format!(
             "minecraft/v{}/manifest.json",
             daedalus::minecraft::CURRENT_FORMAT_VERSION
@@ -25,7 +25,7 @@ pub async fn retrieve_data(
 
     let mut manifest =
         daedalus::minecraft::fetch_version_manifest(None).await?;
-    let cloned_manifest = Arc::new(Mutex::new(manifest.clone()));
+    let cloned_manifest = Arc::new(Mutex::new(old_manifest.clone().unwrap_or(manifest.clone())));
 
     let patches = fetch_library_patches()?;
     let cloned_patches = Arc::new(&patches);
