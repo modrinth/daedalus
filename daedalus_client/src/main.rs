@@ -180,8 +180,6 @@ pub async fn upload_file_to_bucket(
     info!("{} started uploading", path);
     let key = path.clone();
 
-    return Ok(());
-
     for attempt in 1..=4 {
         let result = if let Some(ref content_type) = content_type {
             CLIENT
