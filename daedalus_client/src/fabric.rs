@@ -176,9 +176,7 @@ pub async fn retrieve_data(
             .await?;
 
             if async move {
-                if *skip_upload {
-                    true
-                } else { false }
+                *skip_upload
             }.await {
                 return Ok::<(), Error>(())
             }

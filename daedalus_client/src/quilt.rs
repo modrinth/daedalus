@@ -31,21 +31,21 @@ pub async fn retrieve_data(
     {
         let mut loaders = loaders_mutex.write().await;
 
-        for loader in &list.loader {
+        for (index, loader) in list.loader.iter().enumerate() {
             if versions.iter().any(|x| {
                 x.id == DUMMY_REPLACE_STRING
                     && x.loaders.iter().any(|x| x.id == loader.version)
             }) {
                 if index == 0 {
                     loaders.push((
-                        Box::new(loader.stable),
+                        Box::new(false),
                         loader.version.clone(),
                         Box::new(true),
                     ))
                 }
             } else {
                 loaders.push((
-                    Box::new(loader.stable),
+                    Box::new(false),
                     loader.version.clone(),
                     Box::new(false),
                 ))
@@ -175,14 +175,11 @@ pub async fn retrieve_data(
             )
             .await?;
 
-                if async move {
-                    if *skip_upload {
-                        true
-                    } else { false }
-                }.await {
-                    return             Ok::<(), Error>(())
-
-                }
+            if async move {
+                *skip_upload
+            }.await {
+                return Ok::<(), Error>(())
+            }
 
             let version_path = format!(
                 "quilt/v{}/versions/{}.json",
