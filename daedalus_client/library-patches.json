@@ -165,9 +165,7 @@
     ],
     "override": {
       "rules": [
-        {
-          "action": "allow"
-        },
+        
         {
           "action": "disallow",
           "os": {
@@ -204,13 +202,12 @@
       "org.lwjgl.lwjgl:lwjgl:2.9.1-nightly-20131120",
       "org.lwjgl.lwjgl:lwjgl:2.9.1-nightly-20131017",
       "org.lwjgl.lwjgl:lwjgl:2.9.1-nightly-20130708-debug3",
-      "org.lwjgl.lwjgl:lwjgl:2.9.1"
+      "org.lwjgl.lwjgl:lwjgl:2.9.1",
+      "org.lwjgl.lwjgl:lwjgl:2.9.0"
     ],
     "override": {
       "rules": [
-        {
-          "action": "allow"
-        },
+        
         {
           "action": "disallow",
           "os": {
@@ -271,13 +268,12 @@
       "org.lwjgl.lwjgl:lwjgl_util:2.9.1-nightly-20131120",
       "org.lwjgl.lwjgl:lwjgl_util:2.9.1-nightly-20131017",
       "org.lwjgl.lwjgl:lwjgl_util:2.9.1-nightly-20130708-debug3",
-      "org.lwjgl.lwjgl:lwjgl_util:2.9.1"
+      "org.lwjgl.lwjgl:lwjgl_util:2.9.1",
+      "org.lwjgl.lwjgl:lwjgl_util:2.9.0"
     ],
     "override": {
       "rules": [
-        {
-          "action": "allow"
-        },
+        
         {
           "action": "disallow",
           "os": {
@@ -339,7 +335,8 @@
       "org.lwjgl.lwjgl:lwjgl-platform:2.9.1-nightly-20131120",
       "org.lwjgl.lwjgl:lwjgl-platform:2.9.1-nightly-20131017",
       "org.lwjgl.lwjgl:lwjgl-platform:2.9.1-nightly-20130708-debug3",
-      "org.lwjgl.lwjgl:lwjgl-platform:2.9.1"
+      "org.lwjgl.lwjgl:lwjgl-platform:2.9.1",
+      "org.lwjgl.lwjgl:lwjgl-platform:2.9.0"
     ],
     "override": {
       "downloads": {
@@ -378,9 +375,7 @@
     ],
     "override": {
       "rules": [
-        {
-          "action": "allow"
-        },
+        
         {
           "action": "disallow",
           "os": {
@@ -552,9 +547,7 @@
     ],
     "override": {
       "rules": [
-        {
-          "action": "allow"
-        },
+        
         {
           "action": "disallow",
           "os": {
@@ -726,9 +719,7 @@
     ],
     "override": {
       "rules": [
-        {
-          "action": "allow"
-        },
+        
         {
           "action": "disallow",
           "os": {
@@ -900,9 +891,7 @@
     ],
     "override": {
       "rules": [
-        {
-          "action": "allow"
-        },
+        
         {
           "action": "disallow",
           "os": {
@@ -1074,9 +1063,7 @@
     ],
     "override": {
       "rules": [
-        {
-          "action": "allow"
-        },
+        
         {
           "action": "disallow",
           "os": {
@@ -1248,9 +1235,7 @@
     ],
     "override": {
       "rules": [
-        {
-          "action": "allow"
-        },
+        
         {
           "action": "disallow",
           "os": {
@@ -1422,9 +1407,7 @@
     ],
     "override": {
       "rules": [
-        {
-          "action": "allow"
-        },
+        
         {
           "action": "disallow",
           "os": {
