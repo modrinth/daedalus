@@ -6,7 +6,7 @@ use daedalus::modded::{
 use log::info;
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::Read;
 use std::sync::Arc;
 use std::time::Instant;
@@ -72,7 +72,7 @@ pub async fn retrieve_data(
                             }
 
                             info!("Forge - Installer Start {}", loader_version_full.clone());
-                            let bytes = download_file(&format!("https://maven.neoforged.net/net/neoforged/{1}/{0}/{1}-{0}-installer.jar", loader_version_full, if new_forge == "true".to_string() { "neoforge" } else { "forge" }), None, semaphore.clone()).await?;
+                            let bytes = download_file(&format!("https://maven.neoforged.net/net/neoforged/{1}/{0}/{1}-{0}-installer.jar", loader_version_full, if &*new_forge == "true" { "neoforge" } else { "forge" }), None, semaphore.clone()).await?;
 
                             let reader = std::io::Cursor::new(bytes);
 
