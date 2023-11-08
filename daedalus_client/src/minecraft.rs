@@ -155,7 +155,8 @@ pub async fn retrieve_data(
                         cloned_manifest.versions[position].sha1 =
                             version_info_hash;
                     } else {
-                        cloned_manifest.versions.push(
+                        cloned_manifest.versions.insert(
+                            0,
                             daedalus::minecraft::Version {
                                 id: version_info.id.clone(),
                                 type_: version_info.type_.clone(),
