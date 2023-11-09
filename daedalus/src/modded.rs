@@ -32,8 +32,6 @@ pub struct SidedDataEntry {
     pub server: String,
 }
 
-use chrono::TimeZone;
-
 fn deserialize_date<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
 where
     D: Deserializer<'de>,
@@ -42,7 +40,10 @@ where
 
     DateTime::parse_from_rfc3339(&s)
         .map(|dt| dt.with_timezone(&Utc))
-        .or_else(|_| Utc.datetime_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f"))
+        .or_else(|_| {
+            DateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f")
+                .map(|dt| dt.with_timezone(&Utc))
+        })
         .map_err(serde::de::Error::custom)
 }
 
