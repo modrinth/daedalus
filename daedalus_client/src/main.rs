@@ -6,8 +6,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Semaphore;
 
+mod babric;
 mod fabric;
 mod forge;
+mod legacy_fabric;
 mod minecraft;
 mod neo;
 mod quilt;
@@ -72,6 +74,26 @@ async fn main() {
 
         if let Some(manifest) = versions {
             match fabric::retrieve_data(
+                &manifest,
+                &mut uploaded_files,
+                semaphore.clone(),
+            )
+            .await
+            {
+                Ok(..) => {}
+                Err(err) => error!("{:?}", err),
+            };
+            match legacy_fabric::retrieve_data(
+                &manifest,
+                &mut uploaded_files,
+                semaphore.clone(),
+            )
+            .await
+            {
+                Ok(..) => {}
+                Err(err) => error!("{:?}", err),
+            };
+            match babric::retrieve_data(
                 &manifest,
                 &mut uploaded_files,
                 semaphore.clone(),

@@ -12,7 +12,11 @@ use bincode::{Decode, Encode};
 
 /// The latest version of the format the fabric model structs deserialize to
 pub const CURRENT_FABRIC_FORMAT_VERSION: usize = 0;
-/// The latest version of the format the fabric model structs deserialize to
+/// The latest version of the format the legacy-fabric model structs deserialize to
+pub const CURRENT_LEGACY_FABRIC_FORMAT_VERSION: usize = 0;
+/// The latest version of the format the babric model structs deserialize to
+pub const CURRENT_BABRIC_FORMAT_VERSION: usize = 0;
+/// The latest version of the format the forge model structs deserialize to
 pub const CURRENT_FORGE_FORMAT_VERSION: usize = 0;
 /// The latest version of the format the quilt model structs deserialize to
 pub const CURRENT_QUILT_FORMAT_VERSION: usize = 0;

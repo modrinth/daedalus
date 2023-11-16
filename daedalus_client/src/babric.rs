@@ -1,21 +1,27 @@
+use crate::fabric::{
+    fetch_fabric_like_version, fetch_fabric_like_versions, FabricVersions,
+};
 use crate::{download_file, format_url, upload_file_to_bucket, Error};
 use daedalus::minecraft::{Library, VersionManifest};
+use daedalus::modded::PartialVersionInfo;
 use daedalus::modded::{
-    LoaderVersion, Manifest, PartialVersionInfo, Version, DUMMY_REPLACE_STRING,
+    LoaderVersion, Manifest, Version, DUMMY_REPLACE_STRING,
 };
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock, Semaphore};
+use tokio::sync::Semaphore;
+use tokio::sync::{Mutex, RwLock};
+
+const BABRIC_META_URL: &str = "https://meta.babric.glass-launcher.net/v2";
 
 pub async fn retrieve_data(
     minecraft_versions: &VersionManifest,
     uploaded_files: &mut Vec<String>,
     semaphore: Arc<Semaphore>,
 ) -> Result<(), Error> {
-    let list = fetch_fabric_versions(None, semaphore.clone()).await?;
+    let mut list = fetch_babric_versions(None, semaphore.clone()).await?;
     let old_manifest = daedalus::modded::fetch_manifest(&format_url(&format!(
-        "fabric/v{}/manifest.json",
-        daedalus::modded::CURRENT_FABRIC_FORMAT_VERSION,
+        "babric/v{}/manifest.json",
+        daedalus::modded::CURRENT_BABRIC_FORMAT_VERSION,
     )))
     .await
     .ok();
@@ -31,45 +37,40 @@ pub async fn retrieve_data(
     {
         let mut loaders = loaders_mutex.write().await;
 
-        for (index, loader) in list.loader.iter().enumerate() {
-            if versions.iter().any(|x| {
-                x.id == DUMMY_REPLACE_STRING
-                    && x.loaders.iter().any(|x| x.id == loader.version)
-            }) {
-                if index == 0 {
-                    loaders.push((
-                        Box::new(loader.stable),
-                        loader.version.clone(),
-                        Box::new(true),
-                    ))
-                }
-            } else {
-                loaders.push((
-                    Box::new(loader.stable),
-                    loader.version.clone(),
-                    Box::new(false),
-                ))
-            }
+        for loader in &list.loader {
+            loaders.push((Box::new(loader.stable), loader.version.clone()))
         }
+
+        list.loader
+            .retain(|x| loaders.iter().any(|val| val.1 == x.version))
     }
 
-    const DUMMY_GAME_VERSION: &str = "1.19.4-rc2";
+    const DUMMY_GAME_VERSION: &str = "b1.7.3";
 
     let loader_version_mutex = Mutex::new(Vec::new());
     let uploaded_files_mutex = Arc::new(Mutex::new(Vec::new()));
 
     let loader_versions = futures::future::try_join_all(
         loaders_mutex.read().await.clone().into_iter().map(
-            |(stable, loader, skip_upload)| async {
-                let version = fetch_fabric_version(
+            |(stable, loader)| async {
+                {
+                    if versions.iter().any(|x| {
+                        x.id == DUMMY_REPLACE_STRING
+                            && x.loaders.iter().any(|x| x.id == loader)
+                    }) {
+                        return Ok(None);
+                    }
+                }
+
+                let version = fetch_babric_version(
                     DUMMY_GAME_VERSION,
                     &loader,
                     semaphore.clone(),
                 )
                 .await?;
 
-                Ok::<(Box<bool>, String, PartialVersionInfo, Box<bool>), Error>(
-                    (stable, loader, version, skip_upload),
+                Ok::<Option<(Box<bool>, String, PartialVersionInfo)>, Error>(
+                    Some((stable, loader, version)),
                 )
             },
         ),
@@ -78,8 +79,8 @@ pub async fn retrieve_data(
 
     let visited_artifacts_mutex = Arc::new(Mutex::new(Vec::new()));
     futures::future::try_join_all(loader_versions.into_iter()
-        .map(
-        |(stable, loader, version, skip_upload)| async {
+        .flatten().map(
+        |(stable, loader, version)| async {
             let libs = futures::future::try_join_all(
                 version.libraries.into_iter().map(|mut lib| async {
                     {
@@ -112,7 +113,7 @@ pub async fn retrieve_data(
                                     &format!(
                                         "{}{}",
                                         lib_url.unwrap_or_else(|| {
-                                            "https://maven.fabricmc.net/".to_string()
+                                            "https://maven.glass-launcher.net/babric/".to_string()
                                         }),
                                         artifact_path
                                     ),
@@ -147,14 +148,14 @@ pub async fn retrieve_data(
                         &format!(
                             "{}{}",
                             lib.url.unwrap_or_else(|| {
-                                "https://maven.fabricmc.net/".to_string()
+                                "https://maven.glass-launcher.net/babric/".to_string()
                             }),
                             artifact_path
                         ),
                         None,
                         semaphore.clone(),
                     )
-                    .await?;
+                        .await?;
 
                     lib.url = Some(format_url("maven/"));
 
@@ -165,23 +166,16 @@ pub async fn retrieve_data(
                         &uploaded_files_mutex,
                         semaphore.clone(),
                     )
-                    .await?;
+                        .await?;
 
                     Ok::<Library, Error>(lib)
                 }),
             )
-            .await?;
-
-            if async move {
-                *skip_upload
-            }.await {
-                return Ok::<(), Error>(())
-            }
-
+                .await?;
 
             let version_path = format!(
-                "fabric/v{}/versions/{}.json",
-                daedalus::modded::CURRENT_FABRIC_FORMAT_VERSION,
+                "babric/v{}/versions/{}.json",
+                daedalus::modded::CURRENT_BABRIC_FORMAT_VERSION,
                 &loader
             );
 
@@ -208,7 +202,7 @@ pub async fn retrieve_data(
                 &uploaded_files_mutex,
                 semaphore.clone(),
             )
-            .await?;
+                .await?;
 
             {
                 let mut loader_version_map = loader_version_mutex.lock().await;
@@ -219,37 +213,26 @@ pub async fn retrieve_data(
                         stable: *stable,
                     });
                 }
-                .await;
+                    .await;
             }
 
             Ok::<(), Error>(())
         },
     ))
-    .await?;
+        .await?;
 
-    let mut loader_version_mutex = loader_version_mutex.into_inner();
-    if !loader_version_mutex.is_empty() {
-        if let Some(version) =
-            versions.iter_mut().find(|x| x.id == DUMMY_REPLACE_STRING)
-        {
-            version.loaders.append(&mut loader_version_mutex);
-        } else {
-            versions.push(Version {
-                id: DUMMY_REPLACE_STRING.to_string(),
-                stable: true,
-                loaders: loader_version_mutex,
-            });
-        }
-    }
+    versions.push(Version {
+        id: DUMMY_REPLACE_STRING.to_string(),
+        stable: true,
+        loaders: loader_version_mutex.into_inner(),
+    });
 
     for version in &list.game {
-        if !versions.iter().any(|x| x.id == version.version) {
-            versions.push(Version {
-                id: version.version.clone(),
-                stable: version.stable,
-                loaders: vec![],
-            });
-        }
+        versions.push(Version {
+            id: version.version.clone(),
+            stable: version.stable,
+            loaders: vec![],
+        });
     }
 
     versions.sort_by(|x, y| {
@@ -271,13 +254,18 @@ pub async fn retrieve_data(
         version.loaders.sort_by(|x, y| {
             list.loader
                 .iter()
-                .position(|z| x.id == *z.version)
+                .position(|z| {
+                    x.id.split('-').next().unwrap_or_default() == &*z.version
+                })
                 .unwrap_or_default()
                 .cmp(
                     &list
                         .loader
                         .iter()
-                        .position(|z| y.id == z.version)
+                        .position(|z| {
+                            y.id.split('-').next().unwrap_or_default()
+                                == z.version
+                        })
                         .unwrap_or_default(),
                 )
         })
@@ -285,8 +273,8 @@ pub async fn retrieve_data(
 
     upload_file_to_bucket(
         format!(
-            "fabric/v{}/manifest.json",
-            daedalus::modded::CURRENT_FABRIC_FORMAT_VERSION,
+            "babric/v{}/manifest.json",
+            daedalus::modded::CURRENT_BABRIC_FORMAT_VERSION,
         ),
         serde_json::to_vec(&Manifest {
             game_versions: versions,
@@ -304,28 +292,7 @@ pub async fn retrieve_data(
     Ok(())
 }
 
-const FABRIC_META_URL: &str = "https://meta.fabricmc.net/v2";
-
-pub async fn fetch_fabric_like_version(
-    version_number: &str,
-    loader_version: &str,
-    semaphore: Arc<Semaphore>,
-    meta_url: &str,
-) -> Result<PartialVersionInfo, Error> {
-    Ok(serde_json::from_slice(
-        &download_file(
-            &format!(
-                "{}/versions/loader/{}/{}/profile/json",
-                meta_url, version_number, loader_version
-            ),
-            None,
-            semaphore,
-        )
-        .await?,
-    )?)
-}
-
-async fn fetch_fabric_version(
+async fn fetch_babric_version(
     version_number: &str,
     loader_version: &str,
     semaphore: Arc<Semaphore>,
@@ -334,62 +301,14 @@ async fn fetch_fabric_version(
         version_number,
         loader_version,
         semaphore,
-        FABRIC_META_URL,
+        BABRIC_META_URL,
     )
     .await
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-/// Versions of fabric components
-pub struct FabricVersions {
-    /// Versions of Minecraft that fabric supports
-    pub game: Vec<FabricGameVersion>,
-    /// Available versions of the fabric loader
-    pub loader: Vec<FabricLoaderVersion>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-/// A version of Minecraft that fabric supports
-pub struct FabricGameVersion {
-    /// The version number of the game
-    pub version: String,
-    /// Whether the Minecraft version is stable or not
-    pub stable: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-/// A version of the fabric loader
-pub struct FabricLoaderVersion {
-    /// The separator to get the build number
-    pub separator: String,
-    /// The build number
-    pub build: u32,
-    /// The maven artifact
-    pub maven: String,
-    /// The version number of the fabric loader
-    pub version: String,
-    /// Whether the loader is stable or not
-    pub stable: bool,
-}
-/// Fetches the list of fabric versions
-pub async fn fetch_fabric_like_versions(
-    url: Option<&str>,
-    semaphore: Arc<Semaphore>,
-    meta_url: &str,
-) -> Result<FabricVersions, Error> {
-    Ok(serde_json::from_slice(
-        &download_file(
-            url.unwrap_or(&*format!("{}/versions", meta_url)),
-            None,
-            semaphore,
-        )
-        .await?,
-    )?)
-}
-
-async fn fetch_fabric_versions(
+async fn fetch_babric_versions(
     url: Option<&str>,
     semaphore: Arc<Semaphore>,
 ) -> Result<FabricVersions, Error> {
-    fetch_fabric_like_versions(url, semaphore, FABRIC_META_URL).await
+    fetch_fabric_like_versions(url, semaphore, BABRIC_META_URL).await
 }
