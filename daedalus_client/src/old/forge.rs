@@ -1,10 +1,17 @@
-use crate::{download_file, format_url, upload_file_to_bucket, Error};
-use daedalus::minecraft::{Library, VersionManifest};
+use crate::{
+    download_file, download_file_mirrors, format_url, upload_file_to_bucket,
+    Error,
+};
+use chrono::{DateTime, Utc};
+use daedalus::minecraft::{
+    Argument, ArgumentType, Library, VersionManifest, VersionType,
+};
 use daedalus::modded::{
     LoaderVersion, Manifest, PartialVersionInfo, Processor, SidedDataEntry,
 };
+use lazy_static::lazy_static;
 use log::info;
-use semver::Version;
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
@@ -12,15 +19,26 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{Mutex, Semaphore};
 
+lazy_static! {
+    static ref FORGE_MANIFEST_V1_QUERY: VersionReq =
+        VersionReq::parse(">=8.0.684, <23.5.2851").unwrap();
+    static ref FORGE_MANIFEST_V2_QUERY_P1: VersionReq =
+        VersionReq::parse(">=23.5.2851, <31.2.52").unwrap();
+    static ref FORGE_MANIFEST_V2_QUERY_P2: VersionReq =
+        VersionReq::parse(">=32.0.1, <37.0.0").unwrap();
+    static ref FORGE_MANIFEST_V3_QUERY: VersionReq =
+        VersionReq::parse(">=37.0.0").unwrap();
+}
+
 pub async fn retrieve_data(
     minecraft_versions: &VersionManifest,
     uploaded_files: &mut Vec<String>,
     semaphore: Arc<Semaphore>,
 ) -> Result<(), Error> {
-    let maven_metadata = fetch_maven_metadata(semaphore.clone()).await?;
+    let maven_metadata = fetch_maven_metadata(None, semaphore.clone()).await?;
     let old_manifest = daedalus::modded::fetch_manifest(&format_url(&format!(
-        "neo/v{}/manifest.json",
-        daedalus::modded::CURRENT_NEOFORGE_FORMAT_VERSION,
+        "forge/v{}/manifest.json",
+        daedalus::modded::CURRENT_FORGE_FORMAT_VERSION,
     )))
     .await
     .ok();
@@ -42,10 +60,35 @@ pub async fn retrieve_data(
     for (minecraft_version, loader_versions) in maven_metadata.clone() {
         let mut loaders = Vec::new();
 
-        for (full, loader_version, new_forge) in loader_versions {
-            let version = Version::parse(&loader_version)?;
+        for loader_version_full in loader_versions {
+            let loader_version = loader_version_full.split('-').nth(1);
 
-            loaders.push((full, version, new_forge.to_string()))
+            if let Some(loader_version_raw) = loader_version {
+                // This is a dirty hack to get around Forge not complying with SemVer, but whatever
+                // Most of this is a hack anyways :(
+                // Works for all forge versions!
+                let split =
+                    loader_version_raw.split('.').collect::<Vec<&str>>();
+                let loader_version = if split.len() >= 4 {
+                    if split[0].parse::<i32>().unwrap_or(0) < 6 {
+                        format!("{}.{}.{}", split[0], split[1], split[3])
+                    } else {
+                        format!("{}.{}.{}", split[1], split[2], split[3])
+                    }
+                } else {
+                    loader_version_raw.to_string()
+                };
+
+                let version = Version::parse(&loader_version)?;
+
+                if FORGE_MANIFEST_V1_QUERY.matches(&version)
+                    || FORGE_MANIFEST_V2_QUERY_P1.matches(&version)
+                    || FORGE_MANIFEST_V2_QUERY_P2.matches(&version)
+                    || FORGE_MANIFEST_V3_QUERY.matches(&version)
+                {
+                    loaders.push((loader_version_full, version))
+                }
+            }
         }
 
         if !loaders.is_empty() {
@@ -53,7 +96,7 @@ pub async fn retrieve_data(
                 let mut loaders_versions = Vec::new();
 
                 {
-                    let loaders_futures = loaders.into_iter().map(|(loader_version_full, _, new_forge)| async {
+                    let loaders_futures = loaders.into_iter().map(|(loader_version_full, version)| async {
                         let versions_mutex = Arc::clone(&old_versions);
                         let visited_assets = Arc::clone(&visited_assets_mutex);
                         let uploaded_files_mutex = Arc::clone(&uploaded_files_mutex);
@@ -61,6 +104,23 @@ pub async fn retrieve_data(
                         let minecraft_version = minecraft_version.clone();
 
                         async move {
+                            /// These forge versions are not worth supporting!
+                            const WHITELIST : &[&str] = &[
+                                // Not supported due to `data` field being `[]` even though the type is a map
+                                "1.12.2-14.23.5.2851",
+                                // Malformed Archives
+                                "1.6.1-8.9.0.749",
+                                "1.6.1-8.9.0.751",
+                                "1.6.4-9.11.1.960",
+                                "1.6.4-9.11.1.961",
+                                "1.6.4-9.11.1.963",
+                                "1.6.4-9.11.1.964",
+                            ];
+
+                            if WHITELIST.contains(&&*loader_version_full) {
+                                return Ok(None);
+                            }
+
                             {
                                 let versions = versions_mutex.lock().await;
                                 let version = versions.iter().find(|x|
@@ -72,13 +132,119 @@ pub async fn retrieve_data(
                             }
 
                             info!("Forge - Installer Start {}", loader_version_full.clone());
-                            let bytes = download_file(&format!("https://maven.neoforged.net/net/neoforged/{1}/{0}/{1}-{0}-installer.jar", loader_version_full, if &*new_forge == "true" { "neoforge" } else { "forge" }), None, semaphore.clone()).await?;
+                            let bytes = download_file(&format!("https://maven.minecraftforge.net/net/minecraftforge/forge/{0}/forge-{0}-installer.jar", loader_version_full), None, semaphore.clone()).await?;
 
                             let reader = std::io::Cursor::new(bytes);
 
                             if let Ok(archive) = zip::ZipArchive::new(reader) {
+                                if FORGE_MANIFEST_V1_QUERY.matches(&version) {
                                     let mut archive_clone = archive.clone();
-                                let mut profile = tokio::task::spawn_blocking(move || {
+                                    let profile = tokio::task::spawn_blocking(move || {
+                                        let mut install_profile = archive_clone.by_name("install_profile.json")?;
+
+                                        let mut contents = String::new();
+                                        install_profile.read_to_string(&mut contents)?;
+
+                                        Ok::<ForgeInstallerProfileV1, Error>(serde_json::from_str::<ForgeInstallerProfileV1>(&contents)?)
+                                    }).await??;
+
+                                    let mut archive_clone = archive.clone();
+                                    let file_path = profile.install.file_path.clone();
+                                    let forge_universal_bytes = tokio::task::spawn_blocking(move || {
+                                        let mut forge_universal_file = archive_clone.by_name(&file_path)?;
+                                        let mut forge_universal =  Vec::new();
+                                        forge_universal_file.read_to_end(&mut forge_universal)?;
+
+
+                                        Ok::<bytes::Bytes, Error>(bytes::Bytes::from(forge_universal))
+                                    }).await??;
+                                    let forge_universal_path = profile.install.path.clone();
+
+                                    let now = Instant::now();
+                                    let libs = futures::future::try_join_all(profile.version_info.libraries.into_iter().map(|mut lib| async {
+                                        if let Some(url) = lib.url {
+                                            {
+                                                let mut visited_assets = visited_assets.lock().await;
+
+                                                if visited_assets.contains(&lib.name) {
+                                                    lib.url = Some(format_url("maven/"));
+
+                                                    return Ok::<Library, Error>(lib);
+                                                } else {
+                                                    visited_assets.push(lib.name.clone())
+                                                }
+                                            }
+
+                                            let artifact_path =
+                                                daedalus::get_path_from_artifact(&lib.name)?;
+
+                                            let artifact = if lib.name == forge_universal_path {
+                                                forge_universal_bytes.clone()
+                                            } else {
+                                                let mirrors = vec![&*url, "https://maven.creeperhost.net/", "https://libraries.minecraft.net/"];
+
+                                                download_file_mirrors(
+                                                    &artifact_path,
+                                                    &mirrors,
+                                                    None,
+                                                    semaphore.clone(),
+                                                )
+                                                    .await?
+                                            };
+
+                                            lib.url = Some(format_url("maven/"));
+
+                                            upload_file_to_bucket(
+                                                format!("{}/{}", "maven", artifact_path),
+                                                artifact.to_vec(),
+                                                Some("application/java-archive".to_string()),
+                                                uploaded_files_mutex.as_ref(),
+                                                semaphore.clone(),
+                                            ).await?;
+                                        }
+
+                                        Ok::<Library, Error>(lib)
+                                    })).await?;
+
+                                    let elapsed = now.elapsed();
+                                    info!("Elapsed lib DL: {:.2?}", elapsed);
+
+                                    let new_profile = PartialVersionInfo {
+                                        id: profile.version_info.id,
+                                        inherits_from: profile.install.minecraft,
+                                        release_time: profile.version_info.release_time,
+                                        time: profile.version_info.time,
+                                        main_class: profile.version_info.main_class,
+                                        minecraft_arguments: profile.version_info.minecraft_arguments.clone(),
+                                        arguments: profile.version_info.minecraft_arguments.map(|x| [(ArgumentType::Game, x.split(' ').map(|x| Argument::Normal(x.to_string())).collect())].iter().cloned().collect()),
+                                        libraries: libs,
+                                        type_: profile.version_info.type_,
+                                        data: None,
+                                        processors: None
+                                    };
+
+                                    let version_path = format!(
+                                        "forge/v{}/versions/{}.json",
+                                        daedalus::modded::CURRENT_FORGE_FORMAT_VERSION,
+                                        new_profile.id
+                                    );
+
+                                    upload_file_to_bucket(
+                                        version_path.clone(),
+                                        serde_json::to_vec(&new_profile)?,
+                                        Some("application/json".to_string()),
+                                        uploaded_files_mutex.as_ref(),
+                                        semaphore.clone(),
+                                    ).await?;
+
+                                    return Ok(Some(LoaderVersion {
+                                        id: loader_version_full,
+                                        url: format_url(&version_path),
+                                        stable: false
+                                    }));
+                                } else if FORGE_MANIFEST_V2_QUERY_P1.matches(&version) || FORGE_MANIFEST_V2_QUERY_P2.matches(&version) || FORGE_MANIFEST_V3_QUERY.matches(&version) {
+                                    let mut archive_clone = archive.clone();
+                                    let mut profile = tokio::task::spawn_blocking(move || {
                                         let mut install_profile = archive_clone.by_name("install_profile.json")?;
 
                                         let mut contents = String::new();
@@ -274,8 +440,8 @@ pub async fn retrieve_data(
                                     };
 
                                     let version_path = format!(
-                                        "neo/v{}/versions/{}.json",
-                                        daedalus::modded::CURRENT_NEOFORGE_FORMAT_VERSION,
+                                        "forge/v{}/versions/{}.json",
+                                        daedalus::modded::CURRENT_FORGE_FORMAT_VERSION,
                                         new_profile.id
                                     );
 
@@ -292,6 +458,7 @@ pub async fn retrieve_data(
                                         url: format_url(&version_path),
                                         stable: false
                                     }));
+                                }
                             }
 
                             Ok(None)
@@ -315,6 +482,7 @@ pub async fn retrieve_data(
                             info!("Loader Chunk {}/{len} Elapsed: {:.2?}", chunk_index, elapsed);
                         }
                     }
+                    //futures::future::try_join_all(loaders_futures).await?;
                 }
 
                 versions.lock().await.push(daedalus::modded::Version {
@@ -344,6 +512,7 @@ pub async fn retrieve_data(
             info!("Chunk {}/{len} Elapsed: {:.2?}", chunk_index, elapsed);
         }
     }
+    //futures::future::try_join_all(version_futures).await?;
 
     if let Ok(versions) = Arc::try_unwrap(versions) {
         let mut versions = versions.into_inner();
@@ -352,13 +521,17 @@ pub async fn retrieve_data(
             minecraft_versions
                 .versions
                 .iter()
-                .position(|z| x.id == z.id)
+                .position(|z| {
+                    x.id.replace("1.7.10_pre4", "1.7.10-pre4") == z.id
+                })
                 .unwrap_or_default()
                 .cmp(
                     &minecraft_versions
                         .versions
                         .iter()
-                        .position(|z| y.id == z.id)
+                        .position(|z| {
+                            y.id.replace("1.7.10_pre4", "1.7.10-pre4") == z.id
+                        })
                         .unwrap_or_default(),
                 )
         });
@@ -369,23 +542,22 @@ pub async fn retrieve_data(
                 version.loaders.sort_by(|x, y| {
                     loader_versions
                         .iter()
-                        .position(|z| y.id == z.1)
+                        .position(|z| &y.id == z)
                         .unwrap_or_default()
                         .cmp(
                             &loader_versions
                                 .iter()
-                                .position(|z| x.id == z.1)
+                                .position(|z| &x.id == z)
                                 .unwrap_or_default(),
                         )
-                });
-                version.loaders.reverse();
+                })
             }
         }
 
         upload_file_to_bucket(
             format!(
-                "neo/v{}/manifest.json",
-                daedalus::modded::CURRENT_NEOFORGE_FORMAT_VERSION,
+                "forge/v{}/manifest.json",
+                daedalus::modded::CURRENT_FORGE_FORMAT_VERSION,
             ),
             serde_json::to_vec(&Manifest {
                 game_versions: versions,
@@ -404,80 +576,63 @@ pub async fn retrieve_data(
     Ok(())
 }
 
-const DEFAULT_MAVEN_METADATA_URL_1: &str =
-    "https://maven.neoforged.net/net/neoforged/forge/maven-metadata.xml";
-const DEFAULT_MAVEN_METADATA_URL_2: &str =
-    "https://maven.neoforged.net/net/neoforged/neoforge/maven-metadata.xml";
+const DEFAULT_MAVEN_METADATA_URL: &str =
+    "https://files.minecraftforge.net/net/minecraftforge/forge/maven-metadata.json";
 
-#[derive(Debug, Deserialize)]
-struct Metadata {
-    versioning: Versioning,
-}
-
-#[derive(Debug, Deserialize)]
-struct Versioning {
-    versions: Versions,
-}
-
-#[derive(Debug, Deserialize)]
-struct Versions {
-    version: Vec<String>,
-}
-
+/// Fetches the forge maven metadata from the specified URL. If no URL is specified, the default is used.
+/// Returns a hashmap specifying the versions of the forge mod loader
+/// The hashmap key is a Minecraft version, and the value is the loader versions that work on
+/// the specified Minecraft version
 pub async fn fetch_maven_metadata(
+    url: Option<&str>,
     semaphore: Arc<Semaphore>,
-) -> Result<HashMap<String, Vec<(String, String, bool)>>, Error> {
-    async fn fetch_values(
-        url: &str,
-        semaphore: Arc<Semaphore>,
-    ) -> Result<Metadata, Error> {
-        Ok(serde_xml_rs::from_str(
-            &String::from_utf8(
-                download_file(url, None, semaphore).await?.to_vec(),
-            )
-            .unwrap_or_default(),
-        )?)
-    }
+) -> Result<HashMap<String, Vec<String>>, Error> {
+    Ok(serde_json::from_slice(
+        &download_file(
+            url.unwrap_or(DEFAULT_MAVEN_METADATA_URL),
+            None,
+            semaphore,
+        )
+        .await?,
+    )?)
+}
 
-    let forge_values =
-        fetch_values(DEFAULT_MAVEN_METADATA_URL_1, semaphore.clone()).await?;
-    let neo_values =
-        fetch_values(DEFAULT_MAVEN_METADATA_URL_2, semaphore).await?;
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct ForgeInstallerProfileInstallDataV1 {
+    pub mirror_list: String,
+    pub target: String,
+    /// Path to the Forge universal library
+    pub file_path: String,
+    pub logo: String,
+    pub welcome: String,
+    pub version: String,
+    /// Maven coordinates of the Forge universal library
+    pub path: String,
+    pub profile_name: String,
+    pub minecraft: String,
+}
 
-    let mut map: HashMap<String, Vec<(String, String, bool)>> = HashMap::new();
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct ForgeInstallerProfileManifestV1 {
+    pub id: String,
+    pub libraries: Vec<Library>,
+    pub main_class: Option<String>,
+    pub minecraft_arguments: Option<String>,
+    pub release_time: DateTime<Utc>,
+    pub time: DateTime<Utc>,
+    pub type_: VersionType,
+    pub assets: Option<String>,
+    pub inherits_from: Option<String>,
+    pub jar: Option<String>,
+}
 
-    for value in forge_values.versioning.versions.version {
-        let original = value.clone();
-
-        let parts: Vec<&str> = value.split('-').collect();
-        if parts.len() == 2 {
-            map.entry(parts[0].to_string()).or_default().push((
-                original,
-                parts[1].to_string(),
-                false,
-            ));
-        }
-    }
-
-    for value in neo_values.versioning.versions.version {
-        let original = value.clone();
-
-        let mut parts = value.split('.');
-
-        if let Some(major) = parts.next() {
-            if let Some(minor) = parts.next() {
-                let game_version = format!("1.{}.{}", major, minor);
-
-                map.entry(game_version.clone()).or_default().push((
-                    original.clone(),
-                    format!("{}-{}", game_version, original),
-                    true,
-                ));
-            }
-        }
-    }
-
-    Ok(map)
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct ForgeInstallerProfileV1 {
+    pub install: ForgeInstallerProfileInstallDataV1,
+    pub version_info: ForgeInstallerProfileManifestV1,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
