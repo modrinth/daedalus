@@ -13,6 +13,7 @@ pub async fn fetch_fabric(
     mirror_artifacts: &DashMap<String, MirrorArtifact>,
 ) -> Result<(), Error> {
     fetch(
+        daedalus::modded::CURRENT_FABRIC_FORMAT_VERSION,
         "fabric",
         "https://meta.fabricmc.net/v2",
         "https://maven.fabricmc.net/",
@@ -30,6 +31,7 @@ pub async fn fetch_quilt(
     mirror_artifacts: &DashMap<String, MirrorArtifact>,
 ) -> Result<(), Error> {
     fetch(
+        daedalus::modded::CURRENT_QUILT_FORMAT_VERSION,
         "quilt",
         "https://meta.quiltmc.org/v3",
         "https://meta.quiltmc.org/",
@@ -42,6 +44,7 @@ pub async fn fetch_quilt(
 
 #[tracing::instrument(skip(semaphore, upload_files, mirror_artifacts))]
 async fn fetch(
+    format_version: usize,
     mod_loader: &str,
     meta_url: &str,
     maven_url: &str,
@@ -50,16 +53,13 @@ async fn fetch(
     mirror_artifacts: &DashMap<String, MirrorArtifact>,
 ) -> Result<(), Error> {
     let modrinth_manifest = fetch_json::<Manifest>(
-        &format_url(&format!(
-            "{mod_loader}/v{}/manifest.json",
-            daedalus::modded::CURRENT_FABRIC_FORMAT_VERSION,
-        )),
+        &format_url(&format!("{mod_loader}/v{format_version}/manifest.json",)),
         &semaphore,
     )
     .await
     .ok();
     let fabric_manifest = fetch_json::<FabricVersions>(
-        &format!("{}/versions", meta_url),
+        &format!("{meta_url}/versions"),
         &semaphore,
     )
     .await?;
@@ -86,6 +86,10 @@ async fn fetch(
                     .game_versions
                     .iter()
                     .any(|x| x.id == version.version)
+                    && fabric_manifest
+                        .game
+                        .iter()
+                        .any(|x| x.version == version.version)
                 {
                     fetch_intermediary_versions.push(version);
                 }
@@ -106,7 +110,7 @@ async fn fetch(
             insert_mirrored_artifact(
                 &x.maven,
                 maven_url.to_string(),
-                &mirror_artifacts,
+                mirror_artifacts,
             )?;
         }
     }
@@ -145,7 +149,7 @@ async fn fetch(
                             lib.url
                                 .clone()
                                 .unwrap_or_else(|| maven_url.to_string()),
-                            &mirror_artifacts,
+                            mirror_artifacts,
                         )?;
                     } else {
                         lib.name = new_name;
@@ -166,19 +170,17 @@ async fn fetch(
             .collect::<Result<Vec<_>, Error>>()?;
         let serialized_version_manifests = patched_version_manifests
             .iter()
-            .map(|x| serde_json::to_vec(x).map(|x| bytes::Bytes::from(x)))
+            .map(|x| serde_json::to_vec(x).map(bytes::Bytes::from))
             .collect::<Result<Vec<_>, serde_json::Error>>()?;
 
-        patched_version_manifests
+        serialized_version_manifests
             .into_iter()
-            .zip(serialized_version_manifests.into_iter())
             .enumerate()
-            .for_each(|(index, (_, bytes))| {
+            .for_each(|(index, bytes)| {
                 let loader = fetch_fabric_versions[index];
 
                 let version_path = format!(
-                    "{mod_loader}/v{}/versions/{}.json",
-                    daedalus::modded::CURRENT_FABRIC_FORMAT_VERSION,
+                    "{mod_loader}/v{format_version}/versions/{}.json",
                     loader.version
                 );
 
@@ -195,10 +197,8 @@ async fn fetch(
     if !fetch_fabric_versions.is_empty()
         || !fetch_intermediary_versions.is_empty()
     {
-        let fabric_manifest_path = format!(
-            "{mod_loader}/v{}/manifest.json",
-            daedalus::modded::CURRENT_FABRIC_FORMAT_VERSION,
-        );
+        let fabric_manifest_path =
+            format!("{mod_loader}/v{format_version}/manifest.json",);
 
         let loader_versions = daedalus::modded::Version {
             id: DUMMY_REPLACE_STRING.to_string(),
@@ -208,8 +208,7 @@ async fn fetch(
                 .into_iter()
                 .map(|x| {
                     let version_path = format!(
-                        "{mod_loader}/v{}/versions/{}.json",
-                        daedalus::modded::CURRENT_FABRIC_FORMAT_VERSION,
+                        "{mod_loader}/v{format_version}/versions/{}.json",
                         x.version,
                     );
 
@@ -256,9 +255,9 @@ struct FabricVersions {
 
 #[derive(Deserialize, Debug, Clone)]
 struct FabricLoaderVersion {
-    pub separator: String,
-    pub build: u32,
-    pub maven: String,
+    // pub separator: String,
+    // pub build: u32,
+    // pub maven: String,
     pub version: String,
     #[serde(default)]
     pub stable: bool,

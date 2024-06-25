@@ -1,52 +1,30 @@
 use crate::util::{
-    upload_file_to_bucket, upload_url_to_bucket, upload_url_to_bucket_mirrors,
+    format_url, upload_file_to_bucket, upload_url_to_bucket_mirrors,
+    REQWEST_CLIENT,
 };
 use daedalus::get_path_from_artifact;
 use dashmap::{DashMap, DashSet};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::Semaphore;
+use tracing_error::ErrorLayer;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
+mod error;
 mod fabric;
 mod forge;
 mod minecraft;
 pub mod util;
 
-#[derive(thiserror::Error, Debug)]
-pub enum Error {
-    #[error("{0}")]
-    Daedalus(#[from] daedalus::Error),
-    #[error("Error while managing asynchronous tasks")]
-    TaskError(#[from] tokio::task::JoinError),
-    #[error("Error while deserializing JSON")]
-    Serde(#[from] serde_json::Error),
-    #[error("Failed to validate file checksum at url {url} with hash {hash} after {tries} tries")]
-    ChecksumFailure {
-        hash: String,
-        url: String,
-        tries: u32,
-    },
-    #[error("Unable to fetch {item}")]
-    Fetch { inner: reqwest::Error, item: String },
-    #[error("Error while uploading file to S3: {file}")]
-    S3 {
-        inner: s3::error::S3Error,
-        file: String,
-    },
-    #[error("Error acquiring semaphore: {0}")]
-    Acquire(#[from] tokio::sync::AcquireError),
-    #[error("Tracing error: {0}")]
-    Tracing(#[from] tracing::subscriber::SetGlobalDefaultError),
-}
+pub use error::{Error, ErrorKind, Result};
 
 #[tokio::main]
-async fn main() -> Result<(), Error> {
+async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
     let subscriber = tracing_subscriber::registry()
         .with(fmt::layer())
-        .with(EnvFilter::from_default_env());
+        .with(EnvFilter::from_default_env())
+        .with(ErrorLayer::default());
 
     tracing::subscriber::set_global_default(subscriber)?;
 
@@ -58,55 +36,82 @@ async fn main() -> Result<(), Error> {
         return Ok(());
     }
 
-    // let mut timer = tokio::time::interval(Duration::from_secs(60 * 60));
-    let semaphore = Arc::new(Semaphore::new(10));
+    let semaphore = Arc::new(Semaphore::new(1));
 
-    // loop {
-        // path, upload file
-        let upload_files: DashMap<String, UploadFile> = DashMap::new();
-        // path, mirror artifact
-        let mirror_artifacts: DashMap<String, MirrorArtifact> = DashMap::new();
+    // path, upload file
+    let upload_files: DashMap<String, UploadFile> = DashMap::new();
+    // path, mirror artifact
+    let mirror_artifacts: DashMap<String, MirrorArtifact> = DashMap::new();
 
-        minecraft::fetch(semaphore.clone(), &upload_files, &mirror_artifacts)
-            .await?;
-        fabric::fetch_fabric(
-            semaphore.clone(),
-            &upload_files,
-            &mirror_artifacts,
+    minecraft::fetch(semaphore.clone(), &upload_files, &mirror_artifacts)
+        .await?;
+    fabric::fetch_fabric(semaphore.clone(), &upload_files, &mirror_artifacts)
+        .await?;
+    fabric::fetch_quilt(semaphore.clone(), &upload_files, &mirror_artifacts)
+        .await?;
+    forge::fetch_neo(semaphore.clone(), &upload_files, &mirror_artifacts)
+        .await?;
+    // forge::fetch_forge(semaphore.clone(), &upload_files, &mirror_artifacts)
+    //     .await?;
+
+    futures::future::try_join_all(upload_files.iter().map(|x| {
+        upload_file_to_bucket(
+            x.key().clone(),
+            x.value().file.clone(),
+            x.value().content_type.clone(),
+            &semaphore,
         )
-        .await?;
-        fabric::fetch_quilt(
-            semaphore.clone(),
-            &upload_files,
-            &mirror_artifacts,
+    }))
+    .await?;
+
+    futures::future::try_join_all(mirror_artifacts.iter().map(|x| {
+        upload_url_to_bucket_mirrors(
+            format!("maven/{}", x.key()),
+            x.value().mirrors.iter().map(|x| x.key().clone()).collect(),
+            &semaphore,
         )
-        .await?;
+    }))
+    .await?;
 
-        futures::future::try_join_all(upload_files.iter().map(|x| {
-            upload_file_to_bucket(
-                x.key().clone(),
-                x.value().file.clone(),
-                x.value().content_type.clone(),
-                &semaphore,
-            )
-        }))
-        .await?;
+    if let Ok(token) = dotenvy::var("CLOUDFLARE_TOKEN") {
+        if let Ok(zone_id) = dotenvy::var("CLOUDFLARE_ZONE_ID") {
+            let cache_clears = upload_files
+                .into_iter()
+                .map(|x| format_url(&x.0))
+                .chain(
+                    mirror_artifacts
+                        .into_iter()
+                        .map(|x| format_url(&format!("maven/{}", x.0))),
+                )
+                .collect::<Vec<_>>();
 
-        futures::future::try_join_all(mirror_artifacts.iter().map(|x| {
-            upload_url_to_bucket_mirrors(
-                format!("maven/{}", x.key()),
-                x.value().mirrors.iter().map(|x| x.key().clone()).collect(),
-                &semaphore,
-            )
-        }))
-        .await?;
+            // Cloudflare ratelimits cache clears to 500 files per request
+            for chunk in cache_clears.chunks(500) {
+                REQWEST_CLIENT.post(format!("https://api.cloudflare.com/client/v4/zones/{zone_id}/purge_cache"))
+                    .bearer_auth(&token)
+                    .json(&serde_json::json!({
+                        "files": chunk
+                    }))
+                    .send()
+                    .await
+                    .map_err(|err| {
+                        ErrorKind::Fetch {
+                            inner: err,
+                            item: "cloudflare clear cache".to_string(),
+                        }
+                    })?
+                    .error_for_status()
+                    .map_err(|err| {
+                        ErrorKind::Fetch {
+                            inner: err,
+                            item: "cloudflare clear cache".to_string(),
+                        }
+                    })?;
+            }
+        }
+    }
 
     Ok(())
-
-        // TODO: clear cloudflare cache here: https://developers.cloudflare.com/api/operations/zone-purge#purge-cached-content-by-url
-
-        // timer.tick().await;
-    // }
 }
 
 pub struct UploadFile {
@@ -122,9 +127,9 @@ pub fn insert_mirrored_artifact(
     artifact: &str,
     mirror: String,
     mirror_artifacts: &DashMap<String, MirrorArtifact>,
-) -> Result<(), Error> {
+) -> Result<()> {
     mirror_artifacts
-        .entry(get_path_from_artifact(&artifact)?)
+        .entry(get_path_from_artifact(artifact)?)
         .or_insert(MirrorArtifact {
             mirrors: DashSet::new(),
         })
@@ -161,6 +166,15 @@ fn check_env_vars() -> bool {
     failed |= check_var::<String>("S3_URL");
     failed |= check_var::<String>("S3_REGION");
     failed |= check_var::<String>("S3_BUCKET_NAME");
+
+    if dotenvy::var("CLOUDFLARE_INTEGRATION")
+        .ok()
+        .and_then(|x| x.parse::<bool>().ok())
+        .unwrap_or(false)
+    {
+        failed |= check_var::<String>("CLOUDFLARE_TOKEN");
+        failed |= check_var::<String>("CLOUDFLARE_ZONE_ID");
+    }
 
     failed
 }

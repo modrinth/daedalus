@@ -101,7 +101,7 @@ pub async fn fetch(
         // serialize + compute hashes
         let serialized_version_manifests = patched_version_manifests
             .iter()
-            .map(|x| serde_json::to_vec(x).map(|x| bytes::Bytes::from(x)))
+            .map(|x| serde_json::to_vec(x).map(bytes::Bytes::from))
             .collect::<Result<Vec<_>, serde_json::Error>>()?;
         let hashes_version_manifests = futures::future::try_join_all(
             serialized_version_manifests
@@ -175,7 +175,7 @@ pub async fn fetch(
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-struct LibraryPatch {
+pub struct LibraryPatch {
     #[serde(rename = "_comment")]
     pub _comment: String,
     #[serde(rename = "match")]

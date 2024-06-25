@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::{Error, ErrorKind};
 use bytes::{Bytes, BytesMut};
 use futures::StreamExt;
 use s3::creds::Credentials;
@@ -40,7 +40,7 @@ lazy_static::lazy_static! {
 }
 
 lazy_static::lazy_static! {
-    static ref REQWEST_CLIENT: reqwest::Client = {
+    pub static ref REQWEST_CLIENT: reqwest::Client = {
         let mut headers = reqwest::header::HeaderMap::new();
         if let Ok(header) = reqwest::header::HeaderValue::from_str(&format!(
             "modrinth/daedalus/{} (support@modrinth.com)",
@@ -49,14 +49,12 @@ lazy_static::lazy_static! {
             headers.insert(reqwest::header::USER_AGENT, header);
         }
 
-        let client = reqwest::Client::builder()
+        reqwest::Client::builder()
             .tcp_keepalive(Some(std::time::Duration::from_secs(10)))
             .timeout(std::time::Duration::from_secs(15))
             .default_headers(headers)
             .build()
-            .unwrap();
-
-        client
+            .unwrap()
     };
 }
 
@@ -70,7 +68,8 @@ pub async fn upload_file_to_bucket(
     let _permit = semaphore.acquire().await?;
     let key = path.clone();
 
-    for attempt in 1..=4 {
+    const RETRIES: i32 = 3;
+    for attempt in 1..=(RETRIES + 1) {
         tracing::trace!("Attempting file upload, attempt {attempt}");
         let result = if let Some(ref content_type) = content_type {
             BUCKET
@@ -79,14 +78,14 @@ pub async fn upload_file_to_bucket(
         } else {
             BUCKET.put_object(key.clone(), &bytes).await
         }
-        .map_err(|err| Error::S3 {
+        .map_err(|err| ErrorKind::S3 {
             inner: err,
             file: path.clone(),
         });
 
         match result {
             Ok(_) => return Ok(()),
-            Err(_) if attempt <= 3 => continue,
+            Err(_) if attempt <= RETRIES => continue,
             Err(_) => {
                 result?;
             }
@@ -101,9 +100,10 @@ pub async fn upload_url_to_bucket_mirrors(
     semaphore: &Arc<Semaphore>,
 ) -> Result<(), Error> {
     if mirrors.is_empty() {
-        return Err(Error::Daedalus(daedalus::Error::ParseError(
+        return Err(ErrorKind::InvalidInput(
             "No mirrors provided!".to_string(),
-        )));
+        )
+        .into());
     }
 
     for (index, mirror) in mirrors.iter().enumerate() {
@@ -130,13 +130,14 @@ pub async fn upload_url_to_bucket(
 ) -> Result<(), Error> {
     let _permit = semaphore.acquire().await?;
 
-    for attempt in 1..=4 {
+    const RETRIES: i32 = 3;
+    for attempt in 1..=(RETRIES + 1) {
         tracing::trace!("Attempting streaming file upload, attempt {attempt}");
 
         let result: Result<(), Error> = {
             let response =
                 REQWEST_CLIENT.get(url).send().await.map_err(|err| {
-                    Error::Fetch {
+                    ErrorKind::Fetch {
                         inner: err,
                         item: url.to_string(),
                     }
@@ -145,8 +146,7 @@ pub async fn upload_url_to_bucket(
             let content_type = response
                 .headers()
                 .get(reqwest::header::CONTENT_TYPE)
-                .map(|ct| ct.to_str().ok())
-                .flatten()
+                .and_then(|ct| ct.to_str().ok())
                 .unwrap_or("application/octet-stream")
                 .to_string();
 
@@ -156,12 +156,12 @@ pub async fn upload_url_to_bucket(
 
             if total_size < MIN_PART_SIZE as u64 {
                 let data =
-                    response.bytes().await.map_err(|err| Error::Fetch {
+                    response.bytes().await.map_err(|err| ErrorKind::Fetch {
                         inner: err,
                         item: url.to_string(),
                     })?;
                 BUCKET.put_object(&path, &data).await.map_err(|err| {
-                    Error::S3 {
+                    ErrorKind::S3 {
                         inner: err,
                         file: path.to_string(),
                     }
@@ -170,9 +170,9 @@ pub async fn upload_url_to_bucket(
                 let mut stream = response.bytes_stream();
 
                 let multipart = BUCKET
-                    .initiate_multipart_upload(&path, &content_type)
+                    .initiate_multipart_upload(path, &content_type)
                     .await
-                    .map_err(|err| Error::S3 {
+                    .map_err(|err| ErrorKind::S3 {
                         inner: err,
                         file: path.to_string(),
                     })?;
@@ -196,7 +196,7 @@ pub async fn upload_url_to_bucket(
                             content_type,
                         )
                         .await
-                        .map_err(|err| Error::S3 {
+                        .map_err(|err| ErrorKind::S3 {
                             inner: err,
                             file: path.to_string(),
                         })?;
@@ -207,7 +207,7 @@ pub async fn upload_url_to_bucket(
                 }
 
                 while let Some(chunk) = stream.next().await {
-                    let chunk = chunk.map_err(|err| Error::Fetch {
+                    let chunk = chunk.map_err(|err| ErrorKind::Fetch {
                         inner: err,
                         item: url.to_string(),
                     })?;
@@ -218,7 +218,7 @@ pub async fn upload_url_to_bucket(
                         upload_part(
                             &mut parts,
                             buffer.to_vec(),
-                            &path,
+                            path,
                             &multipart.upload_id,
                             &content_type,
                         )
@@ -231,13 +231,13 @@ pub async fn upload_url_to_bucket(
                     let part = BUCKET
                         .put_multipart_chunk(
                             buffer.to_vec(),
-                            &path,
+                            path,
                             (parts.len() + 1) as u32,
                             &multipart.upload_id,
                             &content_type,
                         )
                         .await
-                        .map_err(|err| Error::S3 {
+                        .map_err(|err| ErrorKind::S3 {
                             inner: err,
                             file: path.to_string(),
                         })?;
@@ -247,12 +247,12 @@ pub async fn upload_url_to_bucket(
 
                 BUCKET
                     .complete_multipart_upload(
-                        &path,
+                        path,
                         &multipart.upload_id,
                         parts,
                     )
                     .await
-                    .map_err(|err| Error::S3 {
+                    .map_err(|err| ErrorKind::S3 {
                         inner: err,
                         file: path.to_string(),
                     })?;
@@ -263,7 +263,7 @@ pub async fn upload_url_to_bucket(
 
         match result {
             Ok(_) => return Ok(()),
-            Err(_) if attempt <= 3 => continue,
+            Err(_) if attempt <= RETRIES => continue,
             Err(_) => {
                 result?;
             }
@@ -291,8 +291,13 @@ pub async fn download_file(
     let _permit = semaphore.acquire().await?;
     tracing::trace!("Starting file download");
 
-    for attempt in 1..=4 {
-        let result = REQWEST_CLIENT.get(url).send().await;
+    const RETRIES: u32 = 10;
+    for attempt in 1..=(RETRIES + 1) {
+        let result = REQWEST_CLIENT
+            .get(url)
+            .send()
+            .await
+            .and_then(|x| x.error_for_status());
 
         match result {
             Ok(x) => {
@@ -304,31 +309,36 @@ pub async fn download_file(
                             if attempt <= 3 {
                                 continue;
                             } else {
-                                return Err(crate::Error::ChecksumFailure {
-                                    hash: sha1.to_string(),
-                                    url: url.to_string(),
-                                    tries: attempt,
-                                });
+                                return Err(
+                                    crate::ErrorKind::ChecksumFailure {
+                                        hash: sha1.to_string(),
+                                        url: url.to_string(),
+                                        tries: attempt,
+                                    }
+                                    .into(),
+                                );
                             }
                         }
                     }
 
                     return Ok(bytes);
-                } else if attempt <= 3 {
+                } else if attempt <= RETRIES {
                     continue;
                 } else if let Err(err) = bytes {
-                    return Err(crate::Error::Fetch {
+                    return Err(crate::ErrorKind::Fetch {
                         inner: err,
                         item: url.to_string(),
-                    });
+                    }
+                    .into());
                 }
             }
-            Err(_) if attempt <= 3 => continue,
+            Err(_) if attempt <= RETRIES => continue,
             Err(err) => {
-                return Err(crate::Error::Fetch {
+                return Err(crate::ErrorKind::Fetch {
                     inner: err,
                     item: url.to_string(),
-                })
+                }
+                .into())
             }
         }
     }
@@ -342,6 +352,15 @@ pub async fn fetch_json<T: DeserializeOwned>(
 ) -> Result<T, Error> {
     Ok(serde_json::from_slice(
         &download_file(url, None, semaphore).await?,
+    )?)
+}
+
+pub async fn fetch_xml<T: DeserializeOwned>(
+    url: &str,
+    semaphore: &Arc<Semaphore>,
+) -> Result<T, Error> {
+    Ok(serde_xml_rs::from_reader(
+        &*download_file(url, None, semaphore).await?,
     )?)
 }
 
