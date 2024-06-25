@@ -51,8 +51,8 @@ async fn main() -> Result<()> {
         .await?;
     forge::fetch_neo(semaphore.clone(), &upload_files, &mirror_artifacts)
         .await?;
-    // forge::fetch_forge(semaphore.clone(), &upload_files, &mirror_artifacts)
-    //     .await?;
+    forge::fetch_forge(semaphore.clone(), &upload_files, &mirror_artifacts)
+        .await?;
 
     futures::future::try_join_all(upload_files.iter().map(|x| {
         upload_file_to_bucket(

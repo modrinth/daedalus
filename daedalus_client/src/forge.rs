@@ -147,15 +147,19 @@ pub async fn fetch_neo(
 
         // NeoForge Forge versions are in this format: 20.2.29-beta, 20.6.119
         // Where the first number is the major MC version, the second is the minor MC version, and the third is the NeoForge version
-        let game_version = format!(
-            "1.{}.{}",
-            parts.next().ok_or_else(
-                || crate::ErrorKind::InvalidInput(format!("Unable to find major game version for NeoForge {loader_version}"))
-            )?,
-            parts.next().ok_or_else(
-                || crate::ErrorKind::InvalidInput(format!("Unable to find minor game version for NeoForge {loader_version}"))
-            )?
-        );
+        let major = parts.next().ok_or_else(
+            || crate::ErrorKind::InvalidInput(format!("Unable to find major game version for NeoForge {loader_version}"))
+        )?;
+
+        let minor = parts.next().ok_or_else(
+            || crate::ErrorKind::InvalidInput(format!("Unable to find minor game version for NeoForge {loader_version}"))
+        )?;
+
+        let game_version = if minor == "0" {
+            format!("1.{major}")
+        } else {
+            format!("1.{major}.{minor}")
+        };
 
         Ok(ForgeVersion {
             format_version: 2,
