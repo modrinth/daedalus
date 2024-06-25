@@ -36,7 +36,12 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let semaphore = Arc::new(Semaphore::new(1));
+    let semaphore = Arc::new(Semaphore::new(
+        dotenvy::var("CONCURRENCY_LIMIT")
+            .ok()
+            .and_then(|x| x.parse().ok())
+            .unwrap_or(10),
+    ));
 
     // path, upload file
     let upload_files: DashMap<String, UploadFile> = DashMap::new();
