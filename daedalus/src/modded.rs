@@ -1,7 +1,7 @@
 use crate::minecraft::{
     Argument, ArgumentType, Library, VersionInfo, VersionType,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 
@@ -33,10 +33,7 @@ where
     let s = String::deserialize(deserializer)?;
 
     serde_json::from_str::<DateTime<Utc>>(&format!("\"{s}\""))
-        .or_else(|_| {
-            DateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.9f")
-                .map(|x| x.with_timezone(&Utc))
-        })
+        .or_else(|_| Utc.datetime_from_str(&s, "%Y-%m-%dT%H:%M:%S%.9f"))
         .map_err(serde::de::Error::custom)
 }
 
@@ -140,15 +137,10 @@ pub fn merge_partial_version(
             .libraries
             .into_iter()
             .chain(merge.libraries)
-            .map(|x| Library {
-                downloads: x.downloads,
-                extract: x.extract,
-                name: x.name.replace(DUMMY_REPLACE_STRING, &merge_id),
-                url: x.url,
-                natives: x.natives,
-                rules: x.rules,
-                checksums: x.checksums,
-                include_in_classpath: x.include_in_classpath,
+            .map(|mut x| {
+                x.name = x.name.replace(DUMMY_REPLACE_STRING, &merge_id);
+
+                x
             })
             .collect::<Vec<_>>(),
         main_class: if let Some(main_class) = partial.main_class {

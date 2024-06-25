@@ -272,6 +272,9 @@ pub struct Library {
     #[serde(default = "default_include_in_classpath")]
     /// Whether the library should be included in the classpath at the game's launch
     pub include_in_classpath: bool,
+    #[serde(default = "default_downloadable")]
+    /// Whether the library should be downloaded
+    pub downloadable: bool,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -358,6 +361,9 @@ pub fn merge_partial_library(
 }
 
 fn default_include_in_classpath() -> bool {
+    true
+}
+fn default_downloadable() -> bool {
     true
 }
 
