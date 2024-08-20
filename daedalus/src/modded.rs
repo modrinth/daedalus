@@ -133,16 +133,26 @@ pub fn merge_partial_version(
         downloads: merge.downloads,
         id: partial.id.replace(DUMMY_REPLACE_STRING, &merge_id),
         java_version: merge.java_version,
-        libraries: partial
-            .libraries
-            .into_iter()
-            .chain(merge.libraries)
-            .map(|mut x| {
-                x.name = x.name.replace(DUMMY_REPLACE_STRING, &merge_id);
+        libraries: {
+            let mut libraries = HashMap::new();
 
-                x
-            })
-            .collect::<Vec<_>>(),
+            // Allow launcher to override existing libraries
+            for mut library in merge
+                .libraries
+                .into_iter()
+                .chain(partial.libraries.into_iter())
+            {
+                library.name =
+                    library.name.replace(DUMMY_REPLACE_STRING, &merge_id);
+
+                // Remove version from name (org.lwjgl:lwjgl-openal:3.3.3:natives-linux -> org.lwjgl:lwjgl-openal:natives-linux)
+                let mut name_parts: Vec<_> = library.name.split(':').collect();
+                name_parts.remove(2);
+                libraries.insert(name_parts.join(":"), library);
+            }
+
+            libraries.into_values().collect::<Vec<_>>()
+        },
         main_class: if let Some(main_class) = partial.main_class {
             main_class
         } else {
